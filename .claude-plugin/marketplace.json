@@ -1,0 +1,15 @@
+{
+  "name": "thrift",
+  "owner": {
+    "name": "Will Glynn"
+  },
+  "description": "Thrift — a deterministic token-efficiency layer for Claude Code.",
+  "plugins": [
+    {
+      "name": "thrift",
+      "source": ".",
+      "description": "Context-rotation nudges, code-mode consolidation, cheaper-tier routing, and a local usage audit. It never costs tokens to save tokens.",
+      "version": "0.1.0"
+    }
+  ]
+}

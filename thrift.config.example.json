@@ -1,0 +1,21 @@
+{
+  "_comment": "Thrift config. Copy to ~/.claude/.thrift/config.json and edit, or run /thrift:setup. Any key can also be set via env THRIFT_<KEY> (e.g. THRIFT_ROTATE_WARN=400000). Delete a key to use the built-in default.",
+
+  "enabled": true,
+
+  "_context_window_note": "Defaults are tuned for a 200k window. On the 1M-context variant, multiply the rotate_* tiers up (e.g. warn 600000 / deliberate 800000 / ceiling 950000).",
+  "rotate_warn": 120000,
+  "rotate_deliberate": 160000,
+  "rotate_ceiling": 185000,
+  "rotate_step": 30000,
+
+  "codemode_window_s": 120,
+  "codemode_threshold": 4,
+  "codemode_cooldown_s": 300,
+
+  "tier_route_enabled": true,
+  "tier_route_strict": false,
+
+  "_remem_note": "Remem (github: darks0l/remem) is an OPTIONAL memory/recall module. It is OFF by default; /thrift:setup asks whether to opt in. Turning it on requires Remem installed separately.",
+  "remem_enabled": false
+}
