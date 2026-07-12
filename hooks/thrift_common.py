@@ -41,6 +41,11 @@ DEFAULTS = {
     "codemode_cooldown_s": 300,
     # Lever 1 — tier routing
     "tier_route_enabled": True,  # recommend a cheaper model for mechanical delegated work
+    # Lever 2b — cache-cold escalation. A turn that writes >= cache_cold_min tokens to cache AND
+    # writes MORE than it reads is a full-context re-prefill: the ~5-min prompt-cache TTL lapsed, so
+    # the whole context was re-written at the 1.25x rate instead of read at 0.1x. That cold return is
+    # the cheapest moment to rotate (you already paid the reload). Escalates the rotation note one tier.
+    "cache_cold_min": 50_000,
     # master switch
     "enabled": True,
 }
@@ -105,16 +110,20 @@ def emit(obj=None):
     print(json.dumps(obj) if obj else "{}")
 
 
-def context_tokens(transcript_path):
-    """Current context size = the last assistant turn's total input footprint
-    (input + cache_read + cache_creation). Reads only the tail of the transcript
-    JSONL, so it is O(1)-ish regardless of session length. Returns 0 on any error
-    (fail-open: never break the session to save tokens).
+def last_usage(transcript_path):
+    """The last assistant turn's usage as (input, cache_read, cache_creation) tokens.
+    Reads only the tail of the transcript JSONL, so it is O(1)-ish regardless of
+    session length. Returns (0, 0, 0) on any error (fail-open: never break the
+    session to save tokens).
+
+    The three fields carry different economics: cache_read bills at ~0.1x (re-reading
+    cached history), cache_creation at ~1.25x (writing/re-writing the cache), input at
+    1x (genuinely new, uncached). Lever 2b uses the split to detect a cold re-prefill.
 
     Generalized from the proven JARVIS context-rotation hook.
     """
     if not transcript_path:
-        return 0
+        return (0, 0, 0)
     try:
         with open(transcript_path, "rb") as f:
             f.seek(0, 2)
@@ -132,13 +141,20 @@ def context_tokens(transcript_path):
                 continue
             u = (j.get("message") or {}).get("usage") or {}
             return (
-                (u.get("input_tokens") or 0)
-                + (u.get("cache_read_input_tokens") or 0)
-                + (u.get("cache_creation_input_tokens") or 0)
+                (u.get("input_tokens") or 0),
+                (u.get("cache_read_input_tokens") or 0),
+                (u.get("cache_creation_input_tokens") or 0),
             )
     except Exception:
         pass
-    return 0
+    return (0, 0, 0)
+
+
+def context_tokens(transcript_path):
+    """Current context size = the last assistant turn's total input footprint
+    (input + cache_read + cache_creation). Fail-open: 0 on any error. Return
+    semantics unchanged; now sourced from the shared last_usage() scanner."""
+    return sum(last_usage(transcript_path))
 
 
 def log_event(name, rec):

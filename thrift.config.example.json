@@ -9,6 +9,9 @@
   "rotate_ceiling": 185000,
   "rotate_step": 30000,
 
+  "_cache_cold_note": "Lever 2b: a turn that writes >= cache_cold_min tokens to cache AND writes more than it reads is a full-context re-prefill after the ~5-min cache TTL lapsed (billed at 1.25x, not the 0.1x cached read). That cold return is the cheapest moment to rotate, so the note escalates one tier. Raise this to make the signal less sensitive; it never fires below rotate_warn.",
+  "cache_cold_min": 50000,
+
   "codemode_window_s": 120,
   "codemode_threshold": 4,
   "codemode_cooldown_s": 300,

@@ -24,7 +24,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from thrift_common import (  # noqa: E402
-    cfg, enabled, ensure_dirs, read_stdin_json, emit, context_tokens,
+    cfg, enabled, ensure_dirs, read_stdin_json, emit, context_tokens, last_usage,
     HANDOFF_DIR, STATE_DIR, log_event,
 )
 
@@ -124,6 +124,18 @@ def reason_for(tier, k, warn, deliberate, ceiling):
     )
 
 
+def cold_note(creat_k, read_k):
+    """Prefix surfaced when Lever 2b detects a cold-cache re-prefill (the ~5-min TTL
+    lapsed and the whole context was re-written at 1.25x instead of read at 0.1x)."""
+    return (
+        f"[THRIFT cache-cold] The last turn wrote ~{creat_k}k tokens to cache and read only "
+        f"~{read_k}k -- the signature of a full-context re-prefill after the ~5-minute prompt-cache "
+        "TTL lapsed (billed at the 1.25x write rate, not the 0.1x read rate). You just paid to "
+        "reload the whole context; a stale session re-warms like this on every cold return. This is "
+        "the cheapest moment to rotate -- a fresh session drops the reload entirely."
+    )
+
+
 def main():
     if not enabled():
         return emit()
@@ -146,6 +158,12 @@ def main():
     tier = "ceiling" if ctx >= ceiling else "deliberate" if ctx >= deliberate else "warn"
     ensure_dirs()
 
+    # Lever 2b: detect a cold-cache re-prefill. A turn that wrote >= cache_cold_min tokens to cache
+    # AND wrote more than it read is a full-context reload (the ~5-min TTL lapsed), not an incremental
+    # append -- the cheapest moment to rotate. Measured from the usage fields, never estimated.
+    inp, read, creat = last_usage(tp)
+    cache_cold = creat >= int(cfg("cache_cold_min")) and creat > read
+
     # Deterministic handoff refresh every >= one step of growth (never starved).
     lw = os.path.join(STATE_DIR, f"{sid}.lastwrite")
     try:
@@ -162,16 +180,38 @@ def main():
     # Respect the continuation loop; surface the model-facing note once per step.
     if data.get("stop_hook_active"):
         return emit()
-    marker = os.path.join(STATE_DIR, f"{sid}.step{ctx // step}")
-    if os.path.exists(marker):
-        return emit()
-    try:
-        open(marker, "w").write(str(ctx))
-    except Exception:
-        pass
 
-    log_event("rotation", {"sid": sid, "ctx": ctx, "tier": tier})
-    emit({"decision": "block", "reason": reason_for(tier, ctx // 1000, warn, deliberate, ceiling)})
+    # Two dedup namespaces per step-bucket: the normal size note, and (separately) the cache-cold
+    # note -- so a cold re-prefill still surfaces once even if the size note already fired this step.
+    bucket = ctx // step
+    step_marker = os.path.join(STATE_DIR, f"{sid}.step{bucket}")
+    cold_marker = os.path.join(STATE_DIR, f"{sid}.cold{bucket}")
+    fire_normal = not os.path.exists(step_marker)
+    fire_cold = cache_cold and not os.path.exists(cold_marker)
+    if not fire_normal and not fire_cold:
+        return emit()
+    if fire_normal:
+        try:
+            open(step_marker, "w").write(str(ctx))
+        except Exception:
+            pass
+    if fire_cold:
+        try:
+            open(cold_marker, "w").write(str(ctx))
+        except Exception:
+            pass
+
+    # A cold re-prefill costs like a larger context, so escalate the framing one tier.
+    order = ["warn", "deliberate", "ceiling"]
+    eff_tier = order[min(order.index(tier) + (1 if cache_cold else 0), 2)]
+
+    reason = reason_for(eff_tier, ctx // 1000, warn, deliberate, ceiling)
+    if cache_cold:
+        reason = cold_note(creat // 1000, read // 1000) + " " + reason
+
+    log_event("rotation", {"sid": sid, "ctx": ctx, "tier": eff_tier, "cache_cold": cache_cold,
+                           "cache_creation": creat, "cache_read": read})
+    emit({"decision": "block", "reason": reason})
 
 
 if __name__ == "__main__":
